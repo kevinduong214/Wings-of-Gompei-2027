@@ -1,0 +1,199 @@
+% =========================================================================
+% 10-ft RC Airplane CG & Inertia Calculator (Main Spar Payload)
+% =========================================================================
+% Global Reference Origin (0, 0, 0):
+%   X = 0 at NOSE TIP (positive towards tail, inches)
+%   Y = 0 at CENTERLINE (positive out right wing, inches)
+%   Z = 0 on WING CHORD LINE (positive upwards, inches)
+% =========================================================================
+clear; clc;
+
+%% 1. CONFIGURATION SELECTOR
+% payload_config = number of bottles to load on the main spar (integer 0..9)
+% Placement order: center, then symmetric pairs outward (±6, ±12, ... in).
+payload_config = 4;   % default: 4 bottles
+
+% Validate input early
+if ~(isscalar(payload_config) && payload_config == floor(payload_config) && payload_config >= 0 && payload_config <= 9)
+    error('payload_config must be an integer between 0 and 9 (number of bottles).');
+end
+
+MAX_ALLOWABLE_WEIGHT_LBS = 54.0; % Hard limit
+BOTTLE_WEIGHT_LBS        = 4.05; % Weight per bottle
+
+%% 2. SUBSYSTEM ORIGIN OFFSETS (Inches from Nose Tip)
+% Set to [0,0,0] to allow global X arms directly from reference table
+origin_fuselage  = [0.0, 0.0, 0.0]; % Nose Tip
+origin_wing      = [0.0, 0.0, 0.0]; % Reference Datum
+origin_empennage = [0.0, 0.0, 0.0]; % Reference Datum
+
+%% 3. WING SPAR GEOMETRY DEFINITION
+% Spar position aligned with wing chord center for payload placement
+spar_loc_mac_percent = 0.25; 
+root_chord_in        = 18.0; 
+
+% Global X location of the Main Spar Axis
+spar_global_X = 36.16; % Set to Wings Arm location
+
+%% 4. AIRFRAME COMPONENT DEFINITIONS (EMPTY BASELINE)
+% --- Fuselage Subsystem ---
+fuselage_parts = [
+    % Wt (lbm)  X_loc   Y_loc   Z_loc   Ixx_loc  Iyy_loc  Izz_loc
+       0.54,     7.79,   0.0,    0.0,     1.0,     1.0,     1.0;   % Battery
+       0.23,     7.20,   0.0,    0.0,     0.5,     0.5,     0.5;   % Receiver Battery
+       0.48,    20.89,   0.0,   -3.0,     1.0,     1.0,     1.0;   % Nose Gear
+       0.13,    11.86,   0.0,    0.0,     0.2,     0.2,     0.2;   % Nose Gear Servo
+       6.98,    34.39,   0.0,    0.0,   100.0,   800.0,   800.0;   % Fuselage (Nose, Cargo Bay, Tail)
+       0.20,    34.30,   5.0,    0.0,     0.5,     0.5,     0.5;   % 1 of 2 ESC (RHS)
+       0.20,    34.30,  -5.0,    0.0,     0.5,     0.5,     0.5;   % 2 of 2 ESC (LHS)
+       0.65,    26.28,   7.0,    0.0,     2.0,     2.0,     2.0;   % 1 of 2 Motors (RHS)
+       0.65,    26.28,  -7.0,    0.0,     2.0,     2.0,     2.0;   % 2 of 2 Motors (LHS)
+       1.25,    41.16,   0.0,   -3.0,    10.0,     5.0,    10.0;   % Landing Gear
+];
+
+% --- Wing Subsystem (Symmetric components split per side) ---
+wing_right_parts = [
+    % Wt (lbm)  X_loc   Y_loc   Z_loc   Ixx_loc  Iyy_loc  Izz_loc
+       3.38,    36.16,  30.0,    0.0,   350.0,    65.0,   400.0;   % Wings (Half)
+       0.16,    47.03,  30.0,    0.0,     1.0,     0.5,     1.0;   % Aileron (Half)
+       0.13,    42.16,  24.0,    0.0,     0.2,     0.2,     0.2;   % 1 Aileron Servo
+];
+
+% --- Empennage Subsystem ---
+elevator_right_parts = [
+    % Wt (lbm)  X_loc   Y_loc   Z_loc   Ixx_loc  Iyy_loc  Izz_loc
+       0.13,    54.73,   5.0,    0.0,     0.2,     0.2,     0.2;   % Rudder/Elevator Servo (Half)
+];
+
+empennage_center_parts = [
+    % Wt (lbm)  X_loc   Y_loc   Z_loc   Ixx_loc  Iyy_loc  Izz_loc
+       0.48,    87.65,   0.0,    0.0,     4.0,     2.0,     6.0;   % Horizontal Stabilizer
+       0.19,    88.16,   0.0,    4.0,     2.0,     2.0,     1.0;   % Vertical Stabilizer
+];
+
+%% 5. SPAR PAYLOAD BOTTLE CONFIGURATIONS
+I_bottle_xx = 15.0;
+I_bottle_yy = 15.0;
+I_bottle_zz = 8.0;
+
+num_bottles = payload_config;
+
+% Lateral Y positions order: center, +6,-6, +12,-12, +18,-18, +24,-24 (inches)
+y_positions = [0, 6, -6, 12, -12, 18, -18, 24, -24];
+
+payload_parts = zeros(0,7);
+for k = 1:num_bottles
+    y = y_positions(k);
+    payload_parts(end+1, :) = [ ...
+        BOTTLE_WEIGHT_LBS, spar_global_X, y, 0.0, I_bottle_xx, I_bottle_yy, I_bottle_zz ...
+    ];
+end
+
+config_name = sprintf('%d Bottle%s Loaded', num_bottles, ternary(num_bottles==1,'','s'));
+
+%% 6. MIRRORING & GLOBAL TRANSFORMS
+[wing_R_global, wing_L_global] = mirror_and_offset(wing_right_parts, origin_wing);
+[elev_R_global, elev_L_global] = mirror_and_offset(elevator_right_parts, origin_empennage);
+
+fuse_global       = offset_subsystem(fuselage_parts, origin_fuselage);
+emp_center_global = offset_subsystem(empennage_center_parts, origin_empennage);
+
+airframe_components = [
+    fuse_global;
+    wing_R_global;
+    wing_L_global;
+    elev_R_global;
+    elev_L_global;
+    emp_center_global
+];
+
+all_components = [airframe_components; payload_parts];
+
+%% 7. CG & INERTIA CALCULATIONS
+% --- Empty Baseline CG ---
+w_empty    = sum(airframe_components(:, 1));
+X_cg_empty = sum(airframe_components(:, 1) .* airframe_components(:, 2)) / w_empty;
+
+% --- Loaded Active Configuration CG ---
+w_total = sum(all_components(:, 1));
+X_cg    = sum(all_components(:, 1) .* all_components(:, 2)) / w_total;
+Y_cg    = sum(all_components(:, 1) .* all_components(:, 3)) / w_total;
+Z_cg    = sum(all_components(:, 1) .* all_components(:, 4)) / w_total;
+
+% CG Shift relative to empty airframe
+delta_X_cg = X_cg - X_cg_empty;
+
+% --- Parallel Axis Theorem for Moments of Inertia ---
+pos_glob = all_components(:, 2:4);
+I_local  = all_components(:, 5:7);
+
+dx = pos_glob(:, 1) - X_cg;
+dy = pos_glob(:, 2) - Y_cg;
+dz = pos_glob(:, 3) - Z_cg;
+
+Ixx_lbin2 = sum(I_local(:,1) + all_components(:,1) .* (dy.^2 + dz.^2));
+Iyy_lbin2 = sum(I_local(:,2) + all_components(:,1) .* (dx.^2 + dz.^2));
+Izz_lbin2 = sum(I_local(:,3) + all_components(:,1) .* (dx.^2 + dy.^2));
+
+% Conversion to slug*ft^2
+CONV_FACTOR = 386.088 * 144; 
+Ixx_slugft2 = Ixx_lbin2 / CONV_FACTOR;
+Iyy_slugft2 = Iyy_lbin2 / CONV_FACTOR;
+Izz_slugft2 = Izz_lbin2 / CONV_FACTOR;
+
+%% 8. DISPLAY SUMMARY & MARGIN ANALYSIS
+fprintf('=======================================================\n');
+fprintf('    MAIN SPAR PAYLOAD & CG SHIFT CALCULATION SUMMARY   \n');
+fprintf('=======================================================\n');
+fprintf('Active Configuration:     %s\n', config_name);
+fprintf('Main Spar Location:       %.2f in behind Nose Tip\n', spar_global_X);
+fprintf('Empty Aircraft Weight:    %.2f lbs\n', w_empty);
+fprintf('Total Aircraft Weight:    %.2f lbs\n', w_total);
+
+if w_total <= MAX_ALLOWABLE_WEIGHT_LBS
+    fprintf('Weight Limit Check:       [ PASS ] (%.2f lbs margin)\n\n', ...
+        MAX_ALLOWABLE_WEIGHT_LBS - w_total);
+else
+    fprintf('Weight Limit Check:       [ EXCEEDED ] (Over limit by %.2f lbs!)\n\n', ...
+        w_total - MAX_ALLOWABLE_WEIGHT_LBS);
+end
+
+fprintf('Center of Gravity Locations (Behind Nose Tip):\n');
+fprintf('  Empty Airframe CG (X_cg):       %.3f in\n', X_cg_empty);
+fprintf('  Active Loaded CG (X_cg):        %.3f in\n', X_cg);
+fprintf('  Net Longitudinal CG Shift:      %+.3f in (%s)\n\n', ...
+    delta_X_cg, get_shift_direction(delta_X_cg));
+
+fprintf('Mass Moments of Inertia (about Active CG):\n');
+fprintf('  Roll Inertia  (Ixx): %10.2f lbm*in^2  |  %.4f slug*ft^2\n', Ixx_lbin2, Ixx_slugft2);
+fprintf('  Pitch Inertia (Iyy): %10.2f lbm*in^2  |  %.4f slug*ft^2\n', Iyy_lbin2, Iyy_slugft2);
+fprintf('  Yaw Inertia   (Izz): %10.2f lbm*in^2  |  %.4f slug*ft^2\n\n', Izz_lbin2, Izz_slugft2);
+
+%% 9. HELPER FUNCTIONS
+function global_parts = offset_subsystem(local_parts, origin_offset)
+    global_parts = local_parts;
+    global_parts(:, 2:4) = local_parts(:, 2:4) + origin_offset;
+end
+
+function [right_global, left_global] = mirror_and_offset(right_local, origin_offset)
+    right_global = right_local;
+    right_global(:, 2:4) = right_local(:, 2:4) + origin_offset;
+
+    left_global = right_local;
+    left_global(:, 3) = -left_global(:, 3);
+    left_global(:, 2:4) = left_global(:, 2:4) + origin_offset;
+end
+
+function str = get_shift_direction(shift)
+    if shift > 0.05
+        str = 'Moved AFT';
+    elseif shift < -0.05
+        str = 'Moved FORWARD';
+    else
+        str = 'Negligible Shift / On Spar';
+    end
+end
+
+function out = ternary(cond, a, b)
+    if cond, out = a; else out = b; end
+end
